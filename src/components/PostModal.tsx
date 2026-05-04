@@ -1,0 +1,419 @@
+import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import ReactMarkdown from "react-markdown";
+
+interface Props {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (data: { title: string; content: string; tags: string }) => Promise<void>;
+  initialData?: any;
+}
+
+interface ImageAttachment {
+  id: string;
+  name: string;
+  dataUrl: string;
+}
+
+// ─── Emoji data ─────────────────────────────────────────────────────────────
+const EMOJI_GROUPS: { label: string; emojis: string[] }[] = [
+  { label: "Smileys", emojis: ["😀","😂","😊","😍","🤔","😅","😭","😎","🥰","😤","🤣","🥳","😇","🙂","😋","😘","🤩","😏","😬","🤯"] },
+  { label: "Hands",   emojis: ["👍","👎","❤️","🙏","👏","🔥","💯","✨","🎉","💪","🤝","👋","✌️","🤞","👌","🤙","💃","🕺","🫶","🤜"] },
+  { label: "Nature",  emojis: ["🌟","⭐","🌈","☀️","🌙","🌺","🌸","🍀","🦋","🐶","🐱","🌿","🌊","🍃","🌻","🦊","🐸","🌴","🦁","🐝"] },
+  { label: "Food",    emojis: ["🍕","🍔","☕","🍰","🍦","🍺","🍎","🍓","🥑","🌮","🍜","🎂","🍣","🥗","🍩","🥤","🍇","🥐","🍫","🧃"] },
+  { label: "Activity",emojis: ["⚽","🎮","🎵","🎨","📚","💻","🎯","🏆","🎸","🎤","🎬","🎭","🎲","🏄","🚀","⚡","🎪","🏋️","🎳","🎰"] },
+  { label: "Objects", emojis: ["💡","🔔","📌","📎","🔑","💎","🎁","📱","🖥️","⌨️","🔭","🧲","🪄","📷","🎙️","🔮","💰","🧸","📣","🪁"] },
+];
+
+// ─── Toolbar ─────────────────────────────────────────────────────────────────
+type ToolbarItem =
+  | { type: "wrap";   label: string; title: string; before: string; after: string }
+  | { type: "line";   label: string; title: string; prefix: string }
+  | { type: "insert"; label: string; title: string; text: string }
+  | { type: "divider" }
+  | { type: "action"; label: string; title: string; id: string };
+
+const TOOLBAR: ToolbarItem[] = [
+  { type: "wrap",   label: "B",   title: "Bold",          before: "**", after: "**" },
+  { type: "wrap",   label: "I",   title: "Italic",        before: "*",  after: "*"  },
+  { type: "wrap",   label: "~~",  title: "Strikethrough", before: "~~", after: "~~" },
+  { type: "wrap",   label: "</>", title: "Inline code",   before: "`",  after: "`"  },
+  { type: "divider" },
+  { type: "line",   label: "H1",  title: "Heading 1",     prefix: "# "   },
+  { type: "line",   label: "H2",  title: "Heading 2",     prefix: "## "  },
+  { type: "line",   label: "H3",  title: "Heading 3",     prefix: "### " },
+  { type: "line",   label: "❝",   title: "Blockquote",    prefix: "> "   },
+  { type: "line",   label: "•",   title: "Bullet list",   prefix: "- "   },
+  { type: "line",   label: "1.",  title: "Ordered list",  prefix: "1. "  },
+  { type: "divider" },
+  { type: "insert", label: "```", title: "Code block",    text: "\n```\n\n```\n" },
+  { type: "insert", label: "---", title: "Divider",       text: "\n---\n"         },
+  { type: "divider" },
+  { type: "action", label: "🖼",  title: "Upload image",  id: "img"   },
+  { type: "action", label: "📄",  title: "Import .md file", id: "md"  },
+  { type: "action", label: "😊",  title: "Insert emoji",  id: "emoji" },
+];
+
+export default function PostModal({ open, onClose, onSubmit, initialData }: Props) {
+  const [title,     setTitle]     = useState("");
+  const [content,   setContent]   = useState("");
+  const [tags,      setTags]      = useState<string[]>([]);
+  const [tagInput,  setTagInput]  = useState("");
+  // Images live in a separate gallery — never inserted raw into the textarea
+  const [images,    setImages]    = useState<ImageAttachment[]>([]);
+  const [loading,   setLoading]   = useState(false);
+  const [preview,   setPreview]   = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [emojiGroup,setEmojiGroup]= useState(0);
+
+  const textareaRef  = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef= useRef<HTMLInputElement>(null);
+  const mdInputRef   = useRef<HTMLInputElement>(null);
+  const emojiRef     = useRef<HTMLDivElement>(null);
+
+  const isEdit   = !!initialData;
+  const username = localStorage.getItem("username") || "U";
+
+  // ── Load / reset state when modal opens ────────────────────────────────────
+  useEffect(() => {
+    if (initialData) {
+      let c = initialData.content || "";
+      // Extract embedded base64 images back into the gallery so textarea stays clean
+      const extracted: ImageAttachment[] = [];
+      const imgRegex = /!\[([^\]]*)\]\((data:[^)]+)\)/g;
+      let m: RegExpExecArray | null;
+      while ((m = imgRegex.exec(c)) !== null) {
+        extracted.push({ id: `img-${extracted.length}`, name: m[1], dataUrl: m[2] });
+      }
+      // Strip base64 images from textarea content
+      c = c.replace(/!\[([^\]]*)\]\(data:[^)]+\)/g, "").replace(/\n{3,}/g, "\n\n").trim();
+      setContent(c);
+      setImages(extracted);
+      setTitle(initialData.title || "");
+      // Parse tags from initialData.tags field (comma-separated)
+      const rawTags = initialData.tags || "";
+      setTags(rawTags ? rawTags.split(",").map((t: string) => t.trim()).filter(Boolean) : []);
+    } else {
+      setTitle(""); setContent(""); setImages([]); setTags([]);
+    }
+    setPreview(false); setEmojiOpen(false);
+  }, [initialData, open]);
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { if (emojiOpen) setEmojiOpen(false); else onClose(); }
+    };
+    if (open) window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [open, onClose, emojiOpen]);
+
+  useEffect(() => {
+    if (!emojiOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (emojiRef.current && !emojiRef.current.contains(e.target as Node)) setEmojiOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [emojiOpen]);
+
+  // Allow submitting when there is text OR at least one image
+  const canSubmit = title.trim().length > 0 && (content.trim().length > 0 || images.length > 0);
+
+  const handleSubmit = async () => {
+    if (!canSubmit || loading) return;
+    setLoading(true);
+    try {
+      // Append clean base64 images at the end — data never touched the textarea
+      const imageMarkdown = images.map(img => `![${img.name}](${img.dataUrl})`).join("\n");
+      const finalContent = content.trim() + (imageMarkdown ? "\n\n" + imageMarkdown : "");
+      await onSubmit({ title, content: finalContent, tags: tags.join(", ") });
+      onClose();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Cursor helpers ──────────────────────────────────────────────────────────
+  const getSelection = () => {
+    const ta = textareaRef.current;
+    return { ta, start: ta?.selectionStart ?? content.length, end: ta?.selectionEnd ?? content.length };
+  };
+  const applyAndFocus = (newContent: string, pos: number) => {
+    setContent(newContent);
+    setTimeout(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(pos, pos); }, 0);
+  };
+  const wrapSelection = (before: string, after: string) => {
+    const { ta, start, end } = getSelection();
+    const selected = content.slice(start, end);
+    applyAndFocus(content.slice(0, start) + before + selected + after + content.slice(end), start + before.length);
+    if (ta && selected) setTimeout(() => ta.setSelectionRange(start + before.length, start + before.length + selected.length), 0);
+  };
+  const insertLinePrefix = (prefix: string) => {
+    const { start } = getSelection();
+    const lineStart = content.lastIndexOf("\n", start - 1) + 1;
+    const nc = content.slice(0, lineStart) + prefix + content.slice(lineStart);
+    applyAndFocus(nc, start + prefix.length);
+  };
+  const insertAtCursor = (text: string) => {
+    const { start, end } = getSelection();
+    applyAndFocus(content.slice(0, start) + text + content.slice(end), start + text.length);
+  };
+
+  // ── File handlers ───────────────────────────────────────────────────────────
+  // Images go to the gallery (NOT the textarea) — preserves clean base64 data
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    files.forEach((file) => {
+      if (!file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImages((prev) => [...prev, { id: `img-${Date.now()}-${Math.random()}`, name: file.name, dataUrl: reader.result as string }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
+
+  const handleMdUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setContent(reader.result as string);
+    reader.readAsText(file);
+    e.target.value = "";
+    setPreview(false);
+  };
+
+  const removeImage = (id: string) => setImages((prev) => prev.filter((img) => img.id !== id));
+
+  // ── Toolbar dispatch ────────────────────────────────────────────────────────
+  const handleToolbar = (item: ToolbarItem) => {
+    if (preview) return; // all toolbar actions disabled in preview mode
+    if (item.type === "wrap")   { wrapSelection(item.before, item.after); return; }
+    if (item.type === "line")   { insertLinePrefix(item.prefix); return; }
+    if (item.type === "insert") { insertAtCursor(item.text); return; }
+    if (item.type === "action") {
+      if (item.id === "img")        imageInputRef.current?.click();
+      else if (item.id === "md")    mdInputRef.current?.click();
+      else if (item.id === "emoji") setEmojiOpen((v) => !v);
+    }
+  };
+
+  // Combined preview = textarea text + gallery images rendered as markdown
+  const previewContent = content.trim() +
+    (images.length > 0 ? "\n\n" + images.map(img => `![${img.name}](${img.dataUrl})`).join("\n") : "");
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div className="fixed inset-0 bg-black/60 z-50"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={onClose}
+          />
+          <motion.div className="fixed inset-0 flex items-center justify-center z-50 p-3"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.18 }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl flex flex-col"
+              style={{ height: "94vh" }}
+            >
+              {/* ── HEADER ──────────────────────────────────────────────────── */}
+              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 flex-shrink-0">
+                <button onClick={onClose} className="text-gray-500 hover:text-black text-sm font-medium w-20">
+                  Cancel
+                </button>
+                <span className="text-sm font-semibold text-gray-900">
+                  {isEdit ? "Edit post" : "Create new post"}
+                </span>
+                <button
+                  onClick={handleSubmit}
+                  disabled={!canSubmit || loading}
+                  className="text-sm font-semibold text-[#6B2515] hover:text-[#541c10] disabled:text-gray-300 disabled:cursor-default transition w-20 text-right"
+                >
+                  {loading ? "Saving…" : isEdit ? "Update" : "Share"}
+                </button>
+              </div>
+
+              {/* ── BODY ────────────────────────────────────────────────────── */}
+              <div className="flex flex-col gap-3 p-5 overflow-y-auto flex-1 min-h-0">
+
+                {/* User row */}
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-[#6B2515] text-white flex items-center justify-center text-sm font-semibold flex-shrink-0">
+                    {username.charAt(0).toUpperCase()}
+                  </div>
+                  <span className="text-sm font-semibold text-gray-900">{username}</span>
+                </div>
+
+                {/* Title */}
+                <input
+                  autoFocus
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Add a title…"
+                  maxLength={200}
+                  className="w-full text-xl font-bold text-gray-900 placeholder-gray-300 border-none outline-none bg-transparent flex-shrink-0"
+                />
+
+                {/* ── HASHTAGS ─────────────────────────────────────────────── */}
+                <div className="flex-shrink-0">
+                  <div className="flex flex-wrap gap-1.5 items-center min-h-[28px]">
+                    {tags.map((tag) => (
+                      <span key={tag} className="inline-flex items-center gap-1 bg-[#6B2515]/10 text-[#6B2515] text-xs px-2 py-0.5 rounded-full">
+                        #{tag}
+                        <button type="button" onClick={() => setTags(tags.filter((t) => t !== tag))}
+                          className="hover:text-red-500 leading-none">×</button>
+                      </span>
+                    ))}
+                    <input
+                      value={tagInput}
+                      onChange={(e) => setTagInput(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
+                      onKeyDown={(e) => {
+                        if ((e.key === "Enter" || e.key === " ") && tagInput.trim()) {
+                          e.preventDefault();
+                          const t = tagInput.trim().toLowerCase();
+                          if (t && !tags.includes(t) && tags.length < 10) setTags([...tags, t]);
+                          setTagInput("");
+                        } else if (e.key === "Backspace" && !tagInput && tags.length > 0) {
+                          setTags(tags.slice(0, -1));
+                        }
+                      }}
+                      placeholder={tags.length === 0 ? "Add tags (press Enter or Space)…" : ""}
+                      className="flex-1 min-w-[160px] text-sm text-gray-500 placeholder-gray-300 border-none outline-none bg-transparent"
+                    />
+                  </div>
+                  {tags.length > 0 && (
+                    <p className="text-[10px] text-gray-300 mt-0.5">{tags.length}/10 tags</p>
+                  )}
+                </div>
+
+                {/* ── EDITOR BLOCK ─────────────────────────────────────────── */}
+                <div className="border border-gray-200 rounded-xl flex flex-col relative flex-1 min-h-0">
+
+                  {/* Toolbar */}
+                  <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-b border-gray-100 bg-gray-50 rounded-t-xl select-none flex-shrink-0">
+                    {TOOLBAR.map((item, i) => {
+                      if (item.type === "divider") return <span key={i} className="w-px h-4 bg-gray-200 mx-1" />;
+                      const isEmojiBtn = item.type === "action" && item.id === "emoji";
+                      return (
+                        <button key={i} type="button" title={preview ? "Exit preview to use toolbar" : item.title}
+                          onClick={() => handleToolbar(item)}
+                          disabled={preview}
+                          className={`px-1.5 py-0.5 rounded text-xs font-medium transition min-w-[26px] text-center
+                            ${isEmojiBtn && emojiOpen ? "bg-[#6B2515]/10 text-[#6B2515]" : "text-gray-600 hover:bg-gray-200 hover:text-gray-900"}
+                            disabled:opacity-30 disabled:cursor-not-allowed`}
+                        >
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                    <button type="button" title={preview ? "Back to edit" : "Preview"}
+                      onClick={() => setPreview((v) => !v)}
+                      className={`ml-auto px-2 py-0.5 rounded text-xs font-medium transition
+                        ${preview ? "bg-[#6B2515] text-white" : "text-gray-500 hover:bg-gray-200"}`}
+                    >
+                      {preview ? "✏️ Edit" : "👁 Preview"}
+                    </button>
+                  </div>
+
+                  {/* Emoji picker */}
+                  {emojiOpen && (
+                    <div ref={emojiRef}
+                      className="absolute top-[42px] left-0 z-20 bg-white border border-gray-200 rounded-xl shadow-xl p-3 w-72"
+                    >
+                      <div className="flex gap-1 mb-2 flex-wrap">
+                        {EMOJI_GROUPS.map((g, idx) => (
+                          <button key={idx} onClick={() => setEmojiGroup(idx)}
+                            className={`text-xs px-2 py-0.5 rounded-full transition ${emojiGroup === idx ? "bg-[#6B2515] text-white" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}
+                          >{g.label}</button>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-10 gap-0.5">
+                        {EMOJI_GROUPS[emojiGroup].emojis.map((em) => (
+                          <button key={em} title={em}
+                            onClick={() => { insertAtCursor(em); setEmojiOpen(false); }}
+                            className="text-lg hover:bg-gray-100 rounded p-0.5 transition leading-none"
+                          >{em}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Write / Preview */}
+                  {preview ? (
+                    <div className="markdown-content p-4 overflow-y-auto flex-1 text-gray-800">
+                      {previewContent.trim() ? (
+                        <ReactMarkdown
+                          urlTransform={(url) => url}
+                          components={{ img: ({ src, alt }) => (
+                            <img src={src} alt={alt} className="max-w-full rounded-lg my-2 max-h-72 object-contain" />
+                          )}}>
+                          {previewContent}
+                        </ReactMarkdown>
+                      ) : (
+                        <span className="text-gray-400 italic text-sm">Nothing to preview yet.</span>
+                      )}
+                    </div>
+                  ) : (
+                    <textarea
+                      ref={textareaRef}
+                      value={content}
+                      onChange={(e) => setContent(e.target.value)}
+                      placeholder={"Write your post here…\n\nTip: use the toolbar to format text — or just write plain text, no markdown needed!\nImages are attached below the editor."}
+                      className="w-full p-4 text-sm text-gray-800 placeholder-gray-300 border-none outline-none resize-none bg-transparent leading-relaxed flex-1 min-h-0"
+                      style={{ minHeight: "180px" }}
+                    />
+                  )}
+                </div>
+
+                {/* ── IMAGE GALLERY ─────────────────────────────────────────── */}
+                {/* Images are kept separate from the textarea to preserve clean base64 */}
+                {images.length > 0 && (
+                  <div className="flex-shrink-0">
+                    <p className="text-xs text-gray-400 mb-1.5">Attached images ({images.length}) — appended to post on save</p>
+                    <div className="flex flex-wrap gap-2">
+                      {images.map((img) => (
+                        <div key={img.id} className="relative group w-24 h-24 rounded-lg overflow-hidden border border-gray-200 bg-gray-50 flex-shrink-0">
+                          <img src={img.dataUrl} alt={img.name} className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex flex-col items-center justify-center gap-1">
+                            <span className="text-white text-[10px] text-center px-1 truncate w-full text-center">{img.name}</span>
+                            <button onClick={() => removeImage(img.id)}
+                              className="text-white text-xs bg-red-500 hover:bg-red-600 rounded px-2 py-0.5 transition"
+                            >Remove</button>
+                          </div>
+                        </div>
+                      ))}
+                      {/* Add more images button */}
+                      <button onClick={() => imageInputRef.current?.click()}
+                        className="w-24 h-24 rounded-lg border-2 border-dashed border-gray-300 text-gray-400 hover:border-[#6B2515] hover:text-[#6B2515] transition flex flex-col items-center justify-center gap-1 flex-shrink-0 text-xs"
+                      >
+                        <span className="text-2xl">+</span>
+                        <span>Add image</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Hidden file inputs */}
+                <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleImageUpload} />
+                <input ref={mdInputRef} type="file" accept=".md,.markdown,text/markdown" className="hidden" onChange={handleMdUpload} />
+              </div>
+
+              {/* ── FOOTER ──────────────────────────────────────────────────── */}
+              <div className="px-5 py-2.5 flex justify-between items-center text-xs text-gray-400 border-t border-gray-100 flex-shrink-0">
+                <span className={title.length > 180 ? "text-orange-400" : ""}>{title.length}/200</span>
+                <span>{images.length > 0 ? `${images.length} image${images.length > 1 ? "s" : ""} · ` : ""}{content.length} chars</span>
+              </div>
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+}
+
