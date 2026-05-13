@@ -7,9 +7,9 @@ export const login = async (data: any) => {
 };
 
 export const register = async (data: any) => {
-  return axios.post("http://localhost:8080/api/auth/register", data);
+  return api.post("/auth/register", data);
 };
 
 export const forgotPassword = async (email: string) => {
-  return axios.post("http://localhost:8080/api/auth/forgot-password", { email });
+  return api.post("/auth/forgot-password", { email });
 };
