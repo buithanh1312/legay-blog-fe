@@ -120,13 +120,20 @@ export default function CommentItem({
     setShowReply(!showReply);
   };
 
+  const [replying, setReplying] = useState(false);
+
   const submitReply = async () => {
-    if (!replyValue.trim()) return;
+    if (!replyValue.trim() || replying) return;
     // At depth >= 1: post to the root comment to keep all replies flat (TikTok style)
     const targetId = depth >= 1 ? rootId! : c.id;
-    await onReply(targetId, replyValue);
-    setReplyValue("");
-    setShowReply(false);
+    setReplying(true);
+    try {
+      await onReply(targetId, replyValue);
+      setReplyValue("");
+      setShowReply(false);
+    } finally {
+      setReplying(false);
+    }
   };
 
   // Flatten replies into ordered list — memoized so the ORDER never changes due to likes
@@ -291,7 +298,7 @@ export default function CommentItem({
               value={replyValue}
               onChange={(e) => setReplyValue(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") submitReply();
+                if (e.key === "Enter") { e.preventDefault(); submitReply(); }
                 if (e.key === "Escape") { setShowReply(false); setReplyValue(""); }
               }}
               autoFocus
@@ -304,11 +311,11 @@ export default function CommentItem({
               title="Cancel"
             >✕</button>
             <button
-              disabled={!replyValue.trim()}
+              disabled={!replyValue.trim() || replying}
               onClick={submitReply}
               className="text-xs bg-[#6B2515] text-white px-3 rounded-full disabled:bg-gray-300"
             >
-              Reply
+              {replying ? "..." : "Reply"}
             </button>
           </div>
         )}
