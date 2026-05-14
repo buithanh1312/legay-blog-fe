@@ -56,7 +56,7 @@ export default function ProfilePage() {
     if (!profile) return;
     setMsgLoading(true);
     try {
-      const conv = await startConversation(profile.username);
+      await startConversation(profile.username);
       navigate(`/messages?with=${encodeURIComponent(profile.username)}`);
     } catch {
       alert("You must follow each other to start a conversation.");

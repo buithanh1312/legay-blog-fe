@@ -24,7 +24,6 @@ export default function MessagesPage() {
   const [newChat, setNewChat] = useState("");
   const [newChatError, setNewChatError] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const currentUser = localStorage.getItem("username") || "";
 
   // Load conversations
   useEffect(() => {
